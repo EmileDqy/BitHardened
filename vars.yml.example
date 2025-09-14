@@ -1,5 +1,5 @@
 # =============================================================================
-# VAULTHARDENED CONFIGURATION
+# BITHARDENED CONFIGURATION
 # =============================================================================
 
 # =============================================================================
@@ -16,7 +16,7 @@
 new_user: <TO_SET>
 
 # SSH public key for the new user (update path to your key)
-ssh_pub_key: "{{ lookup('file', '~/.ssh/id_ed25519_vaulthardened.pub') }}"
+ssh_pub_key: "{{ lookup('file', '~/.ssh/id_ed25519_bithardened.pub') }}"
 
 # Custom SSH port (security through obscurity + reduces automated attacks)
 ssh_port: 2929

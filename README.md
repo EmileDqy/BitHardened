@@ -1,10 +1,10 @@
-# VaultHardened
+# BitHardened
 
 An Ansible automation suite for deploying `Vaultwarden` password manager on hardened Ubuntu servers with mutual TLS (mTLS) authentication.
 
 ## Overview
 
-VaultHardened provides a complete infrastructure-as-code solution that transforms a fresh Ubuntu server into a security-hardened `Vaultwarden` instance. The deployment includes system hardening, PKI certificate authority setup, and application deployment with client certificate authentication.
+BitHardened provides a complete infrastructure-as-code solution that transforms a fresh Ubuntu server into a security-hardened `Vaultwarden` instance. The deployment includes system hardening, PKI certificate authority setup, and application deployment with client certificate authentication.
 
 ## Features
 
@@ -71,7 +71,7 @@ In this project, I added mTLS as a final safety layer. You should enforce strong
 ```bash
 # Clone the repository
 git clone https://github.com/EmileDqy/BitHardened.git
-cd VaultHardened
+cd BitHardened
 
 # Create and activate Python virtual environment
 uv sync

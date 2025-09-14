@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup.sh - Install Ansible collections for VaultHardened
+# setup.sh - Install Ansible collections for BitHardened
 
 set -e
 
