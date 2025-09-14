@@ -1,7 +1,7 @@
 [project]
 name = "VaultHardened"
 version = "0.1.0"
-description = "A set of ansible playbooks made to install vaultwarden on a fresh system. It comes with hardening, mTLS and a vaultwarden + Caddy docker compose."
+description = "An Ansible automation suite for deploying Vaultwarden password manager on hardened Ubuntu servers with mutual TLS (mTLS) authentication."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
