@@ -1,0 +1,191 @@
+---
+- name: Play 1 - Generate Versioned CA on Local Ansible Host
+  hosts: localhost
+  connection: local
+  become: false
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Find existing CA versions
+      ansible.builtin.find:
+        paths: "{{ local_ca_base_path }}"
+        patterns: "v*"
+        file_type: directory
+      register: existing_versions
+
+    - name: Set friendly list of found versions
+      ansible.builtin.set_fact:
+        found_versions_list: "{{ existing_versions.files | map(attribute='path') | map('basename') | sort }}"
+      when: existing_versions.matched > 0
+
+    - name: Prompt user for CA version
+      ansible.builtin.pause:
+        prompt: |
+          Found existing CA versions: {{ found_versions_list }}
+          Enter a new version number (e.g., {{ found_versions_list[-1] | int + 1 }}) or an existing version to overwrite
+      register: user_input
+      when: existing_versions.matched > 0
+
+    - name: Set CA version based on user input or default to '1'
+      ansible.builtin.set_fact:
+        ca_version: "{{ user_input.user_input if existing_versions.matched > 0 else '1' }}"
+
+    - name: Announce which version is being created/updated
+      ansible.builtin.debug:
+        msg: "Proceeding to create/update CA version 'v{{ ca_version }}' at {{ local_ca_base_path }}/v{{ ca_version }}"
+
+    - name: Set final versioned path
+      ansible.builtin.set_fact:
+        local_ca_path: "{{ local_ca_base_path }}/v{{ ca_version }}"
+
+    - name: Ensure local CA version directory structure exists
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+      loop:
+        - "{{ local_ca_path }}"
+        - "{{ local_ca_path }}/backup"
+
+    - name: Deploy versioned CA configuration template locally
+      ansible.builtin.template:
+        src: ../templates/ca.conf.j2
+        dest: "{{ local_ca_path }}/ca-v{{ ca_version }}.conf"
+        mode: '0600'
+
+    # =======================================================================
+    # CA PASSPHRASE HANDLING
+    # =======================================================================
+    - name: Prompt for CA passphrase (interactive mode)
+      ansible.builtin.pause:
+        prompt: |
+          
+          CERTIFICATE AUTHORITY PASSPHRASE REQUIRED
+          =========================================
+          
+          You have enabled interactive CA passphrase mode.
+          Please enter a strong passphrase for the Certificate Authority private key.
+          
+          SECURITY REQUIREMENTS:
+          - Minimum 20 characters recommended
+          - Use a mix of uppercase, lowercase, numbers, and symbols
+          - Store this passphrase securely (password manager recommended)
+          - This passphrase will be required for:
+            * Generating user certificates
+            * CA key operations
+            * Certificate signing
+          
+          Enter CA passphrase (will be hidden)
+        echo: false
+      register: interactive_ca_pass
+      when: prompt_for_ca_pass | default(false) | bool
+
+    - name: Set CA passphrase from interactive input
+      ansible.builtin.set_fact:
+        ca_pass: "{{ interactive_ca_pass.user_input }}"
+      when: prompt_for_ca_pass | default(false) | bool
+      no_log: true
+
+    - name: Validate CA passphrase strength (interactive mode)
+      ansible.builtin.fail:
+        msg: |
+          ERROR: CA passphrase is too weak.
+          
+          Requirements:
+          - Minimum 12 characters (20+ recommended for production)
+          - Cannot be empty
+          
+          Please run the playbook again with a stronger passphrase.
+      when: 
+        - prompt_for_ca_pass | default(false) | bool
+        - (ca_pass | length < 12)
+
+    - name: Validate CA password was set successfully
+      ansible.builtin.fail:
+        msg: |
+          ERROR: CA passphrase not available.
+          
+          The CA passphrase must be provided via one of these methods:
+          1. Set 'prompt_for_ca_pass: true' in vars.yml for interactive input
+          2. Set 'ca_pass' variable directly in vars.yml
+          3. Use Bitwarden Secrets Manager integration
+          
+          Please configure CA passphrase access and try again.
+      when: ca_pass is not defined or ca_pass | length == 0
+
+    - name: Generate versioned CA private key locally
+      ansible.builtin.command:
+        cmd: >
+          openssl genrsa -aes256 -passout pass:{{ ca_pass }}
+          -out {{ local_ca_path }}/ca-v{{ ca_version }}.key 4096
+      # This command will overwrite if the file exists
+      no_log: true
+
+    - name: Generate versioned CA certificate locally
+      ansible.builtin.command:
+        cmd: >
+          openssl req -x509 -new -nodes -key {{ local_ca_path }}/ca-v{{ ca_version }}.key
+          -passin pass:{{ ca_pass }}
+          -sha256 -days {{ ca_validity_days | default(1825) }}
+          -out {{ local_ca_path }}/ca-v{{ ca_version }}.crt
+          -config {{ local_ca_path }}/ca-v{{ ca_version }}.conf
+          -subj "{{ ca_subject }}"
+      no_log: true
+
+    - name: Deploy versioned user certificate generation script locally
+      ansible.builtin.template:
+        src: ../templates/generate_user_cert.sh.j2
+        dest: "{{ local_ca_path }}/generate_user_cert.sh"
+        mode: '0750'
+      vars:
+        ca_path: "{{ local_ca_path }}"
+        ca_cert_name: "ca-v{{ ca_version }}.crt"
+        ca_key_name: "ca-v{{ ca_version }}.key"
+
+- name: Play 2 - Deploy Public CA Bundle to Remote Server
+  hosts: 
+    - server
+  become: true
+  remote_user: "{{ new_user }}"
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Find all public CA certificate versions on local host
+      ansible.builtin.find:
+        paths: "{{ local_ca_base_path }}"
+        patterns: "ca-v*.crt"
+        file_type: file
+        recurse: true
+      register: ca_certs_found
+      delegate_to: localhost
+      become: false
+
+    - name: Fail if no certificates were found
+      ansible.builtin.fail:
+        msg: "No local CA certificates found in {{ local_ca_base_path }}: {{ ca_certs_found }}. Please run Play 1 first."
+      when: ca_certs_found.matched == 0
+
+    - name: Create CA bundle content from all found versions
+      ansible.builtin.set_fact:
+        ca_bundle_content: "{{ ca_bundle_content | default('') + lookup('file', item.path) + '\n' }}"
+      loop: "{{ ca_certs_found.files }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Ensure CA directory exists on the server
+      ansible.builtin.file:
+        path: "{{ remote_ca_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy the combined CA bundle to the server
+      ansible.builtin.copy:
+        content: "{{ ca_bundle_content }}"
+        dest: "{{ remote_ca_path }}/ca-bundle.crt"
+        owner: root
+        group: root
+        mode: '0644'

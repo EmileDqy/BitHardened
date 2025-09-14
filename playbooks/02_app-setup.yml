@@ -1,0 +1,141 @@
+---
+# =============================================================================
+# APPLICATION SETUP PLAYBOOK - VAULTWARDEN + CADDY
+# =============================================================================
+# Purpose: Deploy Vaultwarden with Caddy proxy using client certificate auth
+# Prerequisites: 
+#   1. Server must be hardened (run hardening.yml first)
+#   2. CA certificates must be deployed (run 01_setup-ca.yml first)
+# =============================================================================
+
+- name: Deploy Vaultwarden Application with mTLS
+  hosts: server
+  become: true
+  remote_user: "{{ new_user }}"
+  vars_files:
+    - ../vars.yml
+
+  pre_tasks:
+    # =======================================================================
+    # CERTIFICATE AUTHORITY VERIFICATION
+    # =======================================================================
+    - name: Verify CA certificate bundle exists on server
+      ansible.builtin.stat:
+        path: "{{ remote_ca_path }}/ca-bundle.crt"
+      register: ca_bundle_exists
+
+    - name: CA Setup Required - Fail with helpful message
+      ansible.builtin.fail:
+        msg: |
+          ERROR: CA certificate bundle not found at {{ remote_ca_path }}/ca-bundle.crt
+          
+          The Vaultwarden application requires client certificate authentication, 
+          which depends on your Certificate Authority (CA) being properly deployed.
+          
+          NEXT STEPS:
+          1. Run the CA setup playbook to generate and deploy certificates:
+             ansible-playbook -i inventory playbooks/01_setup-ca.yml
+          
+          2. After CA setup completes successfully, re-run this application setup:
+             ansible-playbook -i inventory playbooks/02_app-setup.yml
+             
+          For more information, see the CA setup documentation in 01_setup-ca.yml
+      when: not ca_bundle_exists.stat.exists
+
+    - name: Display CA certificate information
+      ansible.builtin.debug:
+        msg: |
+          -> CA certificate bundle found at {{ remote_ca_path }}/ca-bundle.crt
+          -> Client certificate authentication will be enabled
+          -> Proceeding with secure application deployment
+
+  tasks:
+    # =======================================================================
+    # APPLICATION DIRECTORY STRUCTURE
+    # =======================================================================
+    - name: 4.1 - Create application directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: '0755'
+      loop:
+        - "/home/{{ new_user }}/vaultwarden"
+        - "/home/{{ new_user }}/vaultwarden/caddy-data"
+        - "/home/{{ new_user }}/vaultwarden/vw-data"
+
+    # =======================================================================
+    # CONFIGURATION DEPLOYMENT
+    # =======================================================================
+    - name: 4.2 - Deploy Caddyfile from template
+      ansible.builtin.template:
+        src: ../templates/Caddyfile.j2
+        dest: "/home/{{ new_user }}/vaultwarden/Caddyfile"
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: '0644'
+      notify: Restart Application Stack
+
+    - name: 4.3 - Deploy docker-compose.yml from template
+      ansible.builtin.template:
+        src: ../templates/docker-compose.yml.j2
+        dest: "/home/{{ new_user }}/vaultwarden/docker-compose.yml"
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: '0644'
+      notify: Restart Application Stack
+
+    # =======================================================================
+    # APPLICATION DEPLOYMENT
+    # =======================================================================
+    - name: 4.4 - Start the Vaultwarden and Caddy services
+      community.docker.docker_compose_v2:
+        project_src: "/home/{{ new_user }}/vaultwarden"
+        state: present
+        recreate: always
+      become_user: "{{ new_user }}"
+
+    # =======================================================================
+    # POST-DEPLOYMENT VERIFICATION
+    # =======================================================================
+    - name: 4.5 - Wait for services to be ready
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        host: "127.0.0.1"
+        timeout: 30
+      loop:
+        - 8080  # Vaultwarden
+        - 443   # Caddy HTTPS
+
+    - name: 4.6 - Display deployment success information
+      ansible.builtin.debug:
+        msg: |
+          -> DEPLOYMENT SUCCESSFUL!
+          
+          Vaultwarden is now running with the following configuration:
+          - Domain: https://{{ domain_name }}
+          - Client Certificate Authentication: ENABLED
+          - Admin Panel: BLOCKED from external access
+          
+          NEXT STEPS:
+          1. Generate client certificates for users:
+             sudo ./pki/<CA version>/generate_user_cert.sh <username>
+          
+          2. Distribute the .p12 certificates to users
+          
+          3. Users can now access Vaultwarden at https://{{ domain_name }}
+             (Client certificate will be required)
+          
+          SECURITY NOTES:
+          - Signups are DISABLED (invite-only)
+          - Admin panel access is restricted to local connections only
+          - Strong password hashing enabled (1,000,000 iterations)
+          - All traffic encrypted with TLS + client certificate verification
+
+  handlers:
+    - name: Restart Application Stack
+      community.docker.docker_compose_v2:
+        project_src: "/home/{{ new_user }}/vaultwarden"
+        restarted: true
+      become_user: "{{ new_user }}"

@@ -1,0 +1,10 @@
+[project]
+name = "VaultHardened"
+version = "0.1.0"
+description = "A set of ansible playbooks made to install vaultwarden on a fresh system. It comes with hardening, mTLS and a vaultwarden + Caddy docker compose."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ansible>=11.9.0",
+    "bitwarden-sdk>=1.0.0",
+]

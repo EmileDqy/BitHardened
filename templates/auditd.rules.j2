@@ -1,0 +1,48 @@
+# System Auditing Rules
+# This ruleset provides a strong baseline for system monitoring.
+# It is based on recommendations from the CIS benchmarks.
+
+# Remove all existing rules.
+-D
+
+# Increase buffer size to handle high event loads.
+-b 8192
+
+# Make the configuration immutable until reboot.
+# -e 1 = enable auditing (mutable)
+# -e 2 = enable auditing (immutable)
+-e 2
+
+## Identity and Access Management
+# Watch for any changes to user, group, and password databases.
+-w /etc/group -p wa -k identity
+-w /etc/passwd -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+
+## System Configuration Changes
+# Watch for changes to sudoers, cron, and SSH configuration.
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d/ -p wa -k scope
+-w /etc/cron.allow -p wa -k actions
+-w /etc/cron.deny -p wa -k actions
+-w /etc/cron.d/ -p wa -k actions
+-w /etc/cron.daily/ -p wa -k actions
+-w /etc/cron.hourly/ -p wa -k actions
+-w /etc/cron.weekly/ -p wa -k actions
+-w /etc/cron.monthly/ -p wa -k actions
+-w /etc/crontab -p wa -k actions
+-w /etc/ssh/sshd_config -p wa -k sshd_config
+
+## Login and Logout Events
+# Monitor login/logout events and session initializations.
+-w /var/log/tallylog -p wa -k logins
+-w /var/run/faillock/ -p wa -k logins
+-w /var/log/lastlog -p wa -k logins
+
+## Privileged Command Execution
+# Monitor for use of commands that can modify system permissions or state.
+-a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=4294967295 -k perm_mod

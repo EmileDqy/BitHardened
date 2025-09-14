@@ -1,0 +1,61 @@
+# =============================================================================
+# VAULTHARDENED CONFIGURATION
+# =============================================================================
+
+# =============================================================================
+# BITWARDEN SECRETS INTEGRATION (Optional)
+# =============================================================================
+# Uncomment to use Bitwarden Secrets Manager for CA passphrase storage
+# bitwarden_uri: 'https://vault.bitwarden.com'
+# bitwarden_ca_secret_uuid: <UUID_FROM_BITWARDEN_SECRETS>
+
+# =============================================================================
+# USER MANAGEMENT & SSH ACCESS
+# =============================================================================
+# The new administrative user to create (replaces default ubuntu user)
+new_user: <TO_SET>
+
+# SSH public key for the new user (update path to your key)
+ssh_pub_key: "{{ lookup('file', '~/.ssh/id_ed25519_vaulthardened.pub') }}"
+
+# Custom SSH port (security through obscurity + reduces automated attacks)
+ssh_port: 2929
+
+# Session timeout for TTY/SSH sessions (seconds)
+idle_timeout: 300
+
+# =============================================================================
+# VAULTWARDEN APPLICATION SETTINGS
+# =============================================================================
+# Your domain name (must have DNS A record pointing to server)
+domain_name: <TO_SET>
+
+# Vaultwarden admin token (generate with: openssl rand -base64 48)
+# For Argon2 hash: echo -n "your_password" | argon2 "$(openssl rand -base64 32)" -e -id -k 65536 -t 3 -p 4 | sed 's/\$/$$/g'
+vaultwarden_admin_token: <TO_SET_ARGON2_HASH>
+
+# =============================================================================
+# CERTIFICATE AUTHORITY (PKI) CONFIGURATION
+# =============================================================================
+# Root CA passphrase - CRITICAL: Store securely!
+# Option 1: Bitwarden Secrets (maybe better than nothing; at your own risks)
+# ca_pass: "{{ lookup('bitwarden.secrets.lookup', bitwarden_ca_secret_uuid, base_url=bitwarden_uri) }}"
+# Option 2: Direct value (bad practice)
+# ca_pass: <TO_SET_STRONG_PASSPHRASE>
+# Option 3 (best; default): prompt the user to type it. Store the passphrase somewhere safe offline or remember it.
+prompt_for_ca_pass: true
+
+# CA storage locations
+local_ca_base_path: "{{ playbook_dir }}/pki"    # Local PKI storage
+remote_ca_path: "/etc/ssl/private_ca"           # Server CA bundle location
+
+# Certificate validity and identification
+ca_validity_days: 1825
+ca_country: "FR"
+ca_organization: "Vaultwarden"
+ca_organizational_unit: "Certificate Authority"
+ca_common_name: "VaultwardenCA"
+ca_email: <TO_SET>
+
+# Distinguished Name for certificates
+ca_subject: "/C={{ ca_country }}/O={{ ca_organization }}/OU={{ ca_organizational_unit }}/CN={{ ca_common_name }}"

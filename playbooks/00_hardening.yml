@@ -1,0 +1,273 @@
+---
+# =============================================================================
+# SERVER HARDENING PLAYBOOK
+# =============================================================================
+# Purpose: Secure and harden a fresh Ubuntu server
+# Run this playbook FIRST after initial server provisioning
+# =============================================================================
+
+- name: Phase 1 - Setup New User and Harden Server
+  hosts: server
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  pre_tasks:
+    - name: Ensure UFW is disabled before we begin critical changes
+      community.general.ufw:
+        state: disabled
+
+  tasks:
+    # =======================================================================
+    # USER MANAGEMENT & ACCESS CONTROL
+    # =======================================================================
+    - name: 1.1 - Create new admin user
+      ansible.builtin.user:
+        name: "{{ new_user }}"
+        state: present
+        shell: /bin/bash
+        groups: 
+          - sudo
+          - docker
+        append: true
+
+    - name: 1.2 - Deploy SSH public key for the new user
+      ansible.builtin.authorized_key:
+        user: "{{ new_user }}"
+        key: "{{ ssh_pub_key }}"
+        state: present
+
+    - name: 1.3 - Ensure passwordless sudo for the new user
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/{{ new_user }}
+        state: present
+        create: true
+        mode: 0440
+        line: "{{ new_user }} ALL=(ALL) NOPASSWD: ALL"
+
+    - name: 1.4 - Set system-wide auto logout
+      ansible.builtin.copy:
+        dest: /etc/profile.d/auto-logout.sh
+        content: |
+          TMOUT={{ idle_timeout }}
+          readonly TMOUT
+          export TMOUT
+        mode: '0644'
+
+    # =======================================================================
+    # PACKAGE MANAGEMENT & DOCKER SETUP
+    # =======================================================================
+    - name: 1.5 - Add Docker's official GPG key and repository (Definitive Method)
+      block:
+        - name: Ensure /etc/apt/keyrings directory exists
+          ansible.builtin.file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: '0755'
+
+        - name: Download, dearmor, and install Docker's GPG key
+          ansible.builtin.shell:
+            cmd: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            creates: /etc/apt/keyrings/docker.gpg
+
+        - name: Add Docker's repository
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+            state: present
+      tags: docker
+
+    - name: 1.6 - Install all necessary security and system packages
+      ansible.builtin.apt:
+        name:
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+          - auditd
+          - apparmor-utils
+        state: present
+        update_cache: true
+
+    # =======================================================================
+    # SSH HARDENING
+    # =======================================================================
+    - name: 2.1 - Harden SSH and set the new port
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?{{ item.key }}.*$"
+        line: "{{ item.key }} {{ item.value }}"
+        state: present
+      with_items:
+        - { key: 'Port', value: '{{ ssh_port }}' }
+        - { key: 'PermitRootLogin', value: 'no' }
+        - { key: 'PasswordAuthentication', value: 'no' }
+        - { key: 'ChallengeResponseAuthentication', value: 'no' }
+      notify: Restart SSH
+
+    # =======================================================================
+    # FIREWALL & NETWORK SECURITY
+    # =======================================================================
+    - name: 3.1 - Add firewall rule for the NEW SSH port
+      community.general.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+
+    - name: 3.2 - Allow essential web traffic (incoming)
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      with_items:
+        - "80"
+        - "443"
+
+    - name: 3.3 - Set default deny policy for outgoing traffic
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: outgoing
+
+    - name: 3.4 - Allow outgoing HTTP/HTTPS for updates and Docker pulls
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+        direction: out
+      with_items:
+        - "80"   # HTTP for package repos, Docker registry
+        - "443"  # HTTPS for secure package repos, Docker registry
+
+    - name: 3.5 - Allow outgoing DNS resolution (essential)
+      community.general.ufw:
+        rule: allow
+        port: "53"
+        proto: "{{ item }}"
+        direction: out
+      with_items:
+        - "tcp"
+        - "udp"
+
+    - name: 3.6 - Allow outgoing NTP for time synchronization (essential)
+      community.general.ufw:
+        rule: allow
+        port: "123"
+        proto: udp
+        direction: out
+
+    - name: 3.7 - Enable UFW with default deny policies
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+      notify: Restart Fail2Ban
+
+    # =======================================================================
+    # SYSTEM SECURITY HARDENING
+    # =======================================================================
+    - name: 3.8 - Configure unattended-upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: '0644'
+
+    - name: 3.9 - Secure Docker daemon
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "ip": "127.0.0.1"
+          }
+        mode: '0644'
+      notify: Restart Docker
+
+    # =======================================================================
+    # KERNEL HARDENING
+    # =======================================================================
+    - name: 3.10 - Harden kernel with sysctl settings
+      ansible.builtin.template:
+        src: ../templates/99-hardening.conf.j2
+        dest: /etc/sysctl.d/99-hardening.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Apply sysctl
+
+    # =======================================================================
+    # MANDATORY ACCESS CONTROL (AppArmor)
+    # =======================================================================
+    - name: 3.11 - Ensure AppArmor is enabled and running
+      ansible.builtin.service:
+        name: apparmor
+        state: started
+        enabled: true
+
+    # =======================================================================
+    # SYSTEM AUDITING
+    # =======================================================================
+    - name: 3.12 - Deploy system auditing rules
+      ansible.builtin.template:
+        src: ../templates/auditd.rules.j2
+        dest: /etc/audit/rules.d/audit.rules
+        owner: root
+        group: root
+        mode: '0600'
+      notify: Reload auditd rules
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+
+    - name: Restart Docker
+      ansible.builtin.service:
+        name: docker
+        state: restarted
+
+    - name: Restart Fail2Ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+    - name: Apply sysctl
+      ansible.builtin.command:
+        cmd: sysctl --system
+
+    - name: Reload auditd rules
+      ansible.builtin.command:
+        cmd: augenrules --load
+      changed_when: false
+
+# =============================================================================
+# CLEANUP PHASE - Remove Default User
+# =============================================================================
+- name: Phase 2 - Final Cleanup
+  hosts: server
+  become: true
+  vars_files:
+    - ../vars.yml
+  remote_user: "{{ new_user }}"
+
+  tasks:
+    - name: Ensure no processes are running as the 'ubuntu' user
+      ansible.builtin.command:
+        cmd: pkill -u ubuntu
+      changed_when: false
+      failed_when: false
+
+    - name: Remove the default ubuntu user
+      ansible.builtin.user:
+        name: ubuntu
+        state: absent
+        remove: true

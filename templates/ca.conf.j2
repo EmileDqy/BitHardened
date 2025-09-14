@@ -1,0 +1,19 @@
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+prompt = no
+
+[req_distinguished_name]
+C = {{ ca_country | default('FR') }}
+ST = {{ ca_state | default('') }}
+L = {{ ca_locality | default('') }}
+O = {{ ca_organization | default('Vaultwarden') }}
+OU = {{ ca_organizational_unit | default('Certificate Authority') }}
+CN = {{ ca_common_name | default('VaultwardenCA') }}
+emailAddress = {{ ca_email | default('') }}
+
+[v3_ca]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

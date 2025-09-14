@@ -1,0 +1,34 @@
+{{ domain_name }} {
+    encode gzip
+
+    tls {
+        client_auth {
+            mode require_and_verify
+            trusted_ca_cert_file /etc/caddy/ca.crt
+        }
+    }
+
+    # Block external access to the admin panel
+    @admin_path path /admin*
+    respond @admin_path "Forbidden" 403
+
+    # Proxy WebSocket connections to Vaultwarden
+    reverse_proxy /notifications/hub vaultwarden:3012
+
+    # Proxy all other requests to Vaultwarden
+    reverse_proxy vaultwarden:80 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_ip}
+    }
+
+    header {
+        # Enables HSTS
+        Strict-Transport-Security "max-age=31536000;"
+        # Prevents clickjacking
+        X-Frame-Options "DENY"
+        # Prevents MIME-type sniffing
+        X-Content-Type-Options "nosniff"
+        # Controls what information is sent with requests
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

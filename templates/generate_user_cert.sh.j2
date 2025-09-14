@@ -1,0 +1,237 @@
+#!/bin/bash
+#
+# Dual-Format P12 Certificate Generator for Cross-Platform mTLS
+# Generates both Legacy (compatible) and Modern (more secure) P12 certificates
+
+set -e
+
+# --- Pre-flight Checks ---
+if [ "$(id -u)" -ne 0 ]; then
+  echo "This script must be run with sudo."
+  exit 1
+fi
+
+if [ -z "$SUDO_USER" ]; then
+    echo "Error: SUDO_USER variable is not set. Please run with 'sudo'."
+    exit 1
+fi
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: sudo $0 <username>"
+    exit 1
+fi
+
+# --- Configuration ---
+USERNAME="$1"
+CA_DIR="{{ ca_path }}"
+CA_KEY="$CA_DIR/{{ ca_key_name | default('ca.key') }}"
+CA_CERT="$CA_DIR/{{ ca_cert_name | default('ca.crt') }}"
+OUTPUT_DIR="$PWD"
+
+echo "=== DUAL-FORMAT P12 CERTIFICATE GENERATOR ==="
+echo "Generating certificates for: $USERNAME"
+echo "Creating both Legacy (compatible) and Modern (secure) formats"
+echo ""
+
+# Securely prompt for CA password
+echo "CA Certificate Authority Password Required"
+echo "=========================================="
+echo ""
+echo "To sign the user certificate, please enter the CA private key password."
+echo "This password was set when the CA was created and is stored securely in Bitwarden."
+echo ""
+
+get_ca_password() {
+    local ca_password1
+    local ca_password2
+    
+    while true; do
+        read -s -p "Enter CA private key password: " ca_password1
+        echo
+        
+        if [ -z "$ca_password1" ]; then
+            echo "ERROR: CA password cannot be empty."
+            echo
+            continue
+        fi
+        
+        break
+    done
+}
+
+get_ca_password
+
+# Create temporary files
+USER_KEY="$CA_DIR/$USERNAME.key.tmp"
+USER_CSR="$CA_DIR/$USERNAME.csr.tmp"
+USER_CERT="$CA_DIR/$USERNAME.crt.tmp"
+
+# 1. Generate 4096-bit private key
+echo "[1/6] Generating 4096-bit private key for maximum security..."
+openssl genrsa -out "$USER_KEY" 4096
+
+# 2. Create certificate signing request
+echo "[2/6] Creating certificate signing request..."
+openssl req -new -key "$USER_KEY" -out "$USER_CSR" -subj "/CN=$USERNAME"
+
+# 3. Sign with CA (2-year validity)
+echo "[3/6] Signing certificate with CA (2-year validity)..."
+if echo -n "$CA_PASSWORD" | openssl x509 -req -in "$USER_CSR" -CA "$CA_CERT" -CAkey "$CA_KEY" \
+    -passin stdin \
+    -CAcreateserial -out "$USER_CERT" -days 730 -sha256 2>/dev/null; then
+    echo "      SUCCESS: Certificate signed with CA"
+else
+    echo "      ERROR: Failed to sign certificate. Please check CA password."
+    # Clean up temporary files
+    rm -f "$USER_KEY" "$USER_CSR" "$USER_CERT"
+    unset CA_PASSWORD
+    exit 1
+fi
+
+# 4. Get P12 password
+echo "[4/6] Setting up certificate password..."
+echo ""
+echo "Enter a strong password for your P12 certificates"
+echo "This password will be used for both legacy and modern versions"
+echo ""
+
+{% raw %}
+get_p12_password() {
+    local password1
+    local password2
+    
+    while true; do
+        read -s -p "Enter certificate password (min 12 chars): " password1
+        echo
+        
+        if [ -z "$password1" ]; then
+            echo "ERROR: Password cannot be empty."
+            echo
+            continue
+        fi
+        
+        if [ ${#password1} -lt 12 ]; then
+            echo "ERROR: Password must be at least 12 characters for security."
+            echo
+            continue
+        fi
+        
+        read -s -p "Confirm password: " password2
+        echo
+        
+        if [ "$password1" = "$password2" ]; then
+            CERT_PASSWORD="$password1"
+            break
+        else
+            echo "ERROR: Passwords don't match. Try again."
+            echo
+        fi
+    done
+}
+{% endraw %}
+
+get_p12_password
+
+# 5. Generate Legacy P12 (macOS/iOS compatible)
+echo "[5/6] Creating LEGACY P12 certificate (maximum compatibility)..."
+echo "      Security: RC2-40-CBC + 3DES, SHA-1 MAC, 2048 iterations"
+
+if openssl pkcs12 -export -legacy -out "$OUTPUT_DIR/$USERNAME-legacy.p12" \
+    -inkey "$USER_KEY" \
+    -in "$USER_CERT" \
+    -certfile "$CA_CERT" \
+    -passout pass:"$CERT_PASSWORD" \
+    -name "$USERNAME" 2>/dev/null; then
+    echo "      SUCCESS: Legacy P12 created successfully"
+else
+    echo "      ERROR: Failed to create legacy P12"
+    exit 1
+fi
+
+# 6. Generate Modern Secure P12
+echo "[6/6] Creating MODERN P12 certificate (maximum security)..."
+echo "      Security: AES-256-CBC, SHA-256 MAC, 200,000 iterations"
+
+if openssl pkcs12 -export -out "$OUTPUT_DIR/$USERNAME-modern.p12" \
+    -inkey "$USER_KEY" \
+    -in "$USER_CERT" \
+    -certfile "$CA_CERT" \
+    -passout pass:"$CERT_PASSWORD" \
+    -macalg sha256 -iter 200000 \
+    -name "$USERNAME" 2>/dev/null; then
+    echo "      SUCCESS: Modern secure P12 created successfully"
+else
+    echo "      ERROR: Failed to create modern P12"
+    exit 1
+fi
+
+# Verify certificates
+echo ""
+echo "Verifying certificate integrity..."
+
+# Test legacy P12
+if echo -n "$CERT_PASSWORD" | openssl pkcs12 -in "$OUTPUT_DIR/$USERNAME-legacy.p12" -passin stdin -noout 2>/dev/null; then
+    echo "   SUCCESS: Legacy P12 verification passed"
+else
+    echo "   WARNING: Legacy P12 verification failed (may be normal for some OpenSSL versions)"
+fi
+
+# Test modern P12
+if echo -n "$CERT_PASSWORD" | openssl pkcs12 -in "$OUTPUT_DIR/$USERNAME-modern.p12" -passin stdin -noout 2>/dev/null; then
+    echo "   SUCCESS: Modern P12 verification passed"
+else
+    echo "   WARNING: Modern P12 verification failed (may be normal for some OpenSSL versions)"
+fi
+
+# Clean up
+chown "$SUDO_USER:$SUDO_GID" "$OUTPUT_DIR/$USERNAME"*
+rm -f "$USER_KEY" "$USER_CSR" "$USER_CERT"
+
+# Clear passwords from memory
+unset CERT_PASSWORD
+unset CA_PASSWORD
+
+echo ""
+echo "SUCCESS! Dual-format certificates generated:"
+echo ""
+echo "Files created:"
+echo "  $USERNAME-legacy.p12  (Compatible - use for older systems)"
+echo "  $USERNAME-modern.p12  (Secure - use for newer systems)"
+echo ""
+echo "USAGE RECOMMENDATIONS:"
+echo ""
+echo "Apple Devices (iOS/macOS):"
+echo "  - macOS Mojave & older: Use LEGACY version"
+echo "  - macOS Catalina & newer: Try MODERN first, fallback to LEGACY"
+echo "  - iOS 12 & older: Use LEGACY version"
+echo "  - iOS 13 & newer: Try MODERN first, fallback to LEGACY"
+echo ""
+echo "Android:"
+echo "  - Android 7 & older: Use LEGACY version"
+echo "  - Android 8 & newer: Try MODERN first, fallback to LEGACY"
+echo ""
+echo "Windows:"
+echo "  - Windows 7/8: Use LEGACY version"
+echo "  - Windows 10/11: Try MODERN first, fallback to LEGACY"
+echo ""
+echo "Linux:"
+echo "  - OpenSSL 1.1.x & older: Use LEGACY version"
+echo "  - OpenSSL 3.0 & newer: Use MODERN version"
+echo ""
+echo "SECURITY COMPARISON:"
+echo ""
+echo "Legacy P12:"
+echo "  - Encryption: RC2-40-CBC (40-bit) + 3DES (112-bit effective)"
+echo "  - MAC: SHA-1 (160-bit)"
+echo "  - Iterations: 2,048 (basic protection)"
+echo "  - Compatibility: Excellent (all platforms)"
+echo "  - Security Level: Adequate for compatibility"
+echo ""
+echo "Modern P12:"
+echo "  - Encryption: AES-256-CBC (256-bit)"
+echo "  - MAC: SHA-256 (256-bit)"
+echo "  - Iterations: 200,000 (strong protection against brute force)"
+echo "  - Compatibility: Good (modern platforms)"
+echo "  - Security Level: Excellent (recommended when supported)"
+echo ""
+echo "TIP: Always try the MODERN version first. Only use LEGACY if you get import errors."

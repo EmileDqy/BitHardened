@@ -1,0 +1,46 @@
+version: '3'
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: always
+    environment:
+      # --- Core Settings ---
+      - DOMAIN=https://{{ domain_name }}
+      - WEBSOCKET_ENABLED=true
+      - ADMIN_TOKEN={{ vaultwarden_admin_token }}
+
+      # --- Security Hardening ---
+      - SIGNUPS_ALLOWED=false
+      - INVITATIONS_ALLOWED=false
+      - SHOW_PASSWORD_HINT=false
+      - EMERGENCY_ACCESS_ENABLED=false
+      - ALLOW_EMAIL_CHANGE=false      
+      - REQUIRE_NEW_DEVICE_EMAILS=true
+      - EVENTS_ENABLED=true           
+      - PASSWORD_ITERATIONS=1000000
+      - INVITATION_EXPIRATION_HOURS=72
+      - TRASH_AUTO_DELETE_DAYS=7
+      - DISABLE_2FA_REMEMBER=true
+      - AUTHENTICATOR_DISABLE_TIME_DRIFT=true
+      - _ENABLE_EMAIL_2FA=false
+  
+      # --- Email (SMTP) Settings ---
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./vw-data:/data
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy-data:/data
+      - {{ remote_ca_path }}/ca-bundle.crt:/etc/caddy/ca.crt:ro

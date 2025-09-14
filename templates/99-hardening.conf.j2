@@ -1,0 +1,43 @@
+# Kernel Hardening Settings
+#
+# A secure baseline for sysctl variables.
+# For a full list of options, see: https://www.kernel.org/doc/Documentation/sysctl/
+
+# --- Network Security ---
+
+# Prevent IP Spoofing
+# Enables source validation of packets.
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.rp_filter = 1
+
+# Protect against SYN flood attacks
+net.ipv4.tcp_syncookies = 1
+
+# Ignore ICMP broadcast requests to prevent smurf attacks
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+# Ignore bogus ICMP responses
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+# Disable ICMP redirects (prevents man-in-the-middle attacks)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# Disable source routing (rarely used and a security risk)
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+
+# --- Memory and Execution Security ---
+
+# Enable Address Space Layout Randomization (ASLR)
+# 2 = Full randomization (heap, stack, mmap, VDSO, etc.)
+kernel.randomize_va_space = 2
+
+# Restrict access to kernel logs to privileged users
+kernel.dmesg_restrict = 1
